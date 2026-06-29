@@ -1,6 +1,7 @@
 package lines
 
 import (
+	"bufio"
 	"context"
 	"strings"
 	"testing"
@@ -71,6 +72,25 @@ func TestProcess(t *testing.T) {
 			wantStats: Stats{Total: 0, Kept: 0},
 		},
 		{
+			// bufio.ScanLines strips a trailing \r, so CRLF input is
+			// normalized to LF (lossy CRLF->LF) in the output.
+			name:      "crlf normalized to lf",
+			input:     "a\r\nb",
+			transform: keepAll,
+			want:      "a\nb",
+			wantStats: Stats{Total: 2, Kept: 2},
+		},
+		{
+			// A trailing newline is not round-tripped: lines are joined
+			// with \n and no terminator, so this yields the same output as
+			// the "passthrough" case above ("a\nb\nc").
+			name:      "trailing newline is dropped",
+			input:     "a\nb\nc\n",
+			transform: keepAll,
+			want:      "a\nb\nc",
+			wantStats: Stats{Total: 3, Kept: 3},
+		},
+		{
 			name:  "filters drop lines and renumber kept",
 			input: "keep\ndrop\nkeep",
 			transform: func(line Line, number LineNumber) (Line, bool) {
@@ -107,6 +127,37 @@ func TestProcessReportsReadError(t *testing.T) {
 	want := assert.New(t)
 	want.ErrorIs(err, ErrReadInput)
 	want.ErrorIs(err, boom, "the underlying read error must be wrapped")
+	want.Empty(output)
+	want.Equal(Stats{}, stats)
+}
+
+// TestProcessAcceptsLargeLine proves the scan buffer is raised above bufio's
+// default 64 KiB ceiling: a line larger than that default but within MaxLine is
+// processed without error. Without the scanner.Buffer override this would fail
+// with bufio.ErrTooLong, so it guards the raise against regression.
+func TestProcessAcceptsLargeLine(t *testing.T) {
+	t.Parallel()
+	line := strings.Repeat("x", 128<<10) // 128 KiB > bufio's 64 KiB default
+
+	output, stats, err := Process(context.Background(), strings.NewReader(line), keepAll)
+
+	want := assert.New(t)
+	want.NoError(err)
+	want.Equal(Output(line), output)
+	want.Equal(Stats{Total: 1, Kept: 1}, stats)
+}
+
+// TestProcessRejectsOverlongLine pins the documented MaxLine ceiling: a line
+// exceeding it surfaces ErrReadInput wrapping bufio.ErrTooLong.
+func TestProcessRejectsOverlongLine(t *testing.T) {
+	t.Parallel()
+	line := strings.Repeat("x", 2*int(MaxLine)) // unambiguously over the limit
+
+	output, stats, err := Process(context.Background(), strings.NewReader(line), keepAll)
+
+	want := assert.New(t)
+	want.ErrorIs(err, ErrReadInput)
+	want.ErrorIs(err, bufio.ErrTooLong, "the underlying scanner cause must be wrapped")
 	want.Empty(output)
 	want.Equal(Stats{}, stats)
 }

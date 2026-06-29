@@ -1,6 +1,6 @@
 # go-lines
 
-Line-oriented text processing for Go: small pure per-line operations (`Uppercase`, `WithPrefix`, `Numbered`, `Contains`) plus a streaming `Process` that applies a `Transform` to each line of an `io.Reader`, honors context cancellation, and reports line counts.
+Line-oriented text processing for Go: small pure per-line operations (`Uppercase`, `WithPrefix`, `Numbered`, `Contains`) plus a buffered line processor `Process` that applies a `Transform` to each line of an `io.Reader`, honors context cancellation, and reports line counts. `Process` is buffered, not streaming: every kept line is held in memory and joined into a single result, so peak memory is `O(input)`.
 
 ## Install
 
@@ -39,4 +39,4 @@ func main() {
 }
 ```
 
-`Process` returns `ErrReadInput` (matchable with `errors.Is`, wrapping the underlying cause) when the reader fails. The package is CLI-agnostic and dependency-free (testify for tests only).
+`Process` returns `ErrReadInput` (matchable with `errors.Is`, wrapping the underlying cause) when the reader fails. A single line longer than `MaxLine` (1 MiB) likewise fails with `ErrReadInput` wrapping `bufio.ErrTooLong`. Lines are joined with `\n` and no terminator, so a trailing newline is not round-tripped and CRLF input is normalized to LF. The package is CLI-agnostic and dependency-free (testify for tests only).
