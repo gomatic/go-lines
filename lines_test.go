@@ -3,6 +3,7 @@ package lines
 import (
 	"bufio"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -91,6 +92,43 @@ func TestProcess(t *testing.T) {
 			wantStats: Stats{Total: 3, Kept: 3},
 		},
 		{
+			// Input that is only newline terminators yields one empty line
+			// per terminator, joined back to terminators minus the dropped
+			// trailing one: "\n\n\n" -> three empty lines -> "\n\n".
+			name:      "only newlines yields empty lines",
+			input:     "\n\n\n",
+			transform: keepAll,
+			want:      "\n\n",
+			wantStats: Stats{Total: 3, Kept: 3},
+		},
+		{
+			// Multibyte UTF-8 is passed through byte-for-byte; the scanner
+			// splits on the LF byte only and never on bytes inside a rune.
+			name:      "unicode multibyte passthrough",
+			input:     "héllo\n世界\nنص",
+			transform: keepAll,
+			want:      "héllo\n世界\nنص",
+			wantStats: Stats{Total: 3, Kept: 3},
+		},
+		{
+			// Embedded NUL bytes are ordinary content: only LF delimits
+			// lines, so NULs are preserved verbatim within a line.
+			name:      "embedded NUL bytes preserved",
+			input:     "a\x00b\nc\x00",
+			transform: keepAll,
+			want:      "a\x00b\nc\x00",
+			wantStats: Stats{Total: 2, Kept: 2},
+		},
+		{
+			// A lone CR not followed by LF is not a line terminator and is
+			// preserved, unlike the trailing CR of a CRLF pair.
+			name:      "lone CR is not a terminator",
+			input:     "a\rb\nc",
+			transform: keepAll,
+			want:      "a\rb\nc",
+			wantStats: Stats{Total: 2, Kept: 2},
+		},
+		{
 			name:  "filters drop lines and renumber kept",
 			input: "keep\ndrop\nkeep",
 			transform: func(line Line, number LineNumber) (Line, bool) {
@@ -129,6 +167,42 @@ func TestProcessReportsReadError(t *testing.T) {
 	want.ErrorIs(err, boom, "the underlying read error must be wrapped")
 	want.Empty(output)
 	want.Equal(Stats{}, stats)
+}
+
+// failAfterReader yields its data on the first Read, then fails every
+// subsequent Read with err. It injects a mid-stream read failure: the scanner
+// successfully tokenizes the buffered lines before the error surfaces.
+type failAfterReader struct {
+	err  error
+	data []byte
+	done bool
+}
+
+func (r *failAfterReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, r.err
+	}
+	r.done = true
+	return copy(p, r.data), nil
+}
+
+// TestProcessReportsMidStreamReadError proves the discard-on-error contract:
+// even when lines were read successfully before the reader fails, Process
+// surfaces ErrReadInput wrapping the cause and returns no partial output or
+// stats. This is stronger than the error-on-first-read case, which never
+// accumulates any lines.
+func TestProcessReportsMidStreamReadError(t *testing.T) {
+	t.Parallel()
+	const boom Error = "read exploded mid-stream"
+	reader := &failAfterReader{data: []byte("a\nb\nc\n"), err: boom}
+
+	output, stats, err := Process(context.Background(), reader, keepAll)
+
+	want := assert.New(t)
+	want.ErrorIs(err, ErrReadInput)
+	want.ErrorIs(err, boom, "the underlying read error must be wrapped")
+	want.Empty(output, "no partial output is returned on a mid-stream failure")
+	want.Equal(Stats{}, stats, "stats are reset on a mid-stream failure")
 }
 
 // TestProcessAcceptsLargeLine proves the scan buffer is raised above bufio's
@@ -179,4 +253,52 @@ func TestProcessStopsOnCancelledContext(t *testing.T) {
 func TestErrorString(t *testing.T) {
 	t.Parallel()
 	assert.New(t).Equal("failed to read input", ErrReadInput.Error())
+}
+
+// FuzzProcess exercises the line scanner against arbitrary byte input under the
+// identity transform and asserts the structural invariants that hold for every
+// input. Idempotence is deliberately NOT asserted: a trailing empty line is
+// unrepresentable once the joining terminator is dropped, so "\n\n\n" (three
+// empty lines) becomes "\n\n" (two), and re-processing is not a fixed point.
+// The invariants that DO hold for every input are:
+//   - Process never panics.
+//   - The only error a string reader can produce is the MaxLine overflow, which
+//     is the documented ErrReadInput.
+//   - The identity transform keeps exactly as many lines as it sees.
+//   - Each scanned line is itself newline-free (the scanner splits on every LF),
+//     and the lines are joined with a single LF, so the output holds exactly
+//     one separator between lines: max(Total-1, 0) newlines in all.
+func FuzzProcess(f *testing.F) {
+	for _, seed := range []string{
+		"",
+		"\n",
+		"\n\n\n",
+		"a\nb\nc",
+		"a\nb\nc\n",
+		"a\r\nb\r\nc",
+		"a\rb",
+		"héllo\n世界\nنص",
+		"a\x00b\nc\x00",
+		strings.Repeat("x", 128<<10),
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, input string) {
+		want := assert.New(t)
+
+		output, stats, err := Process(context.Background(), strings.NewReader(input), keepAll)
+		if err != nil {
+			want.True(errors.Is(err, ErrReadInput), "the only failure is ErrReadInput, got %v", err)
+			return
+		}
+
+		want.Equal(stats.Total, stats.Kept, "the identity transform keeps every line it sees")
+
+		separators := 0
+		if stats.Total > 0 {
+			separators = int(stats.Total) - 1
+		}
+		want.Equal(separators, strings.Count(string(output), "\n"), "lines are joined with exactly one LF between them")
+	})
 }
