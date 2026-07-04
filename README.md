@@ -1,42 +1,5 @@
-# go-lines
+[![actions](https://github.com/gomatic/go-lines/actions/workflows/actions.yml/badge.svg)](https://github.com/gomatic/go-lines/actions/workflows/actions.yml)
+[![docs](https://github.com/gomatic/go-lines/actions/workflows/docs.yml/badge.svg)](https://github.com/gomatic/go-lines/actions/workflows/docs.yml)
+[![go](https://github.com/gomatic/go-lines/actions/workflows/go.yml/badge.svg)](https://github.com/gomatic/go-lines/actions/workflows/go.yml)
 
-Line-oriented text processing for Go: small pure per-line operations (`Uppercase`, `WithPrefix`, `Numbered`, `Contains`) plus a buffered line processor `Process` that applies a `Transform` to each line of an `io.Reader`, honors context cancellation, and reports line counts. `Process` is buffered, not streaming: every kept line is held in memory and joined into a single result, so peak memory is `O(input)`.
-
-## Install
-
-```sh
-go get github.com/gomatic/go-lines
-```
-
-## Usage
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"strings"
-
-	"github.com/gomatic/go-lines"
-)
-
-func main() {
-	// A transform keeps lines containing "go" and uppercases them with a number.
-	transform := func(line lines.Line, n lines.LineNumber) (lines.Line, bool) {
-		if !lines.Contains(line, "go") {
-			return "", false
-		}
-		return lines.Numbered(lines.Uppercase(line), n), true
-	}
-
-	out, stats, err := lines.Process(context.Background(), strings.NewReader("go fast\nstop\ngo home"), transform)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(out)                       //    1 | GO FAST\n   3 | GO HOME
-	fmt.Println(stats.Total, stats.Kept)   // 3 2
-}
-```
-
-`Process` returns `ErrReadInput` (matchable with `errors.Is`, wrapping the underlying cause) when the reader fails. A single line longer than `MaxLine` (1 MiB) likewise fails with `ErrReadInput` wrapping `bufio.ErrTooLong`. Lines are joined with `\n` and no terminator, so a trailing newline is not round-tripped and CRLF input is normalized to LF. The package is CLI-agnostic and dependency-free (testify for tests only).
+[docs](https://gomatic.github.io/docs.go-lines/)
