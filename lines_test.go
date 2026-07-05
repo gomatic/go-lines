@@ -8,6 +8,7 @@ import (
 	"testing"
 	"testing/iotest"
 
+	errs "github.com/gomatic/go-error"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -158,7 +159,7 @@ func TestProcess(t *testing.T) {
 
 func TestProcessReportsReadError(t *testing.T) {
 	t.Parallel()
-	const boom Error = "read exploded"
+	const boom errs.Const = "read exploded"
 
 	output, stats, err := Process(context.Background(), iotest.ErrReader(boom), keepAll)
 
@@ -193,7 +194,7 @@ func (r *failAfterReader) Read(p []byte) (int, error) {
 // accumulates any lines.
 func TestProcessReportsMidStreamReadError(t *testing.T) {
 	t.Parallel()
-	const boom Error = "read exploded mid-stream"
+	const boom errs.Const = "read exploded mid-stream"
 	reader := &failAfterReader{data: []byte("a\nb\nc\n"), err: boom}
 
 	output, stats, err := Process(context.Background(), reader, keepAll)
@@ -247,12 +248,6 @@ func TestProcessStopsOnCancelledContext(t *testing.T) {
 	want.ErrorIs(err, context.Canceled)
 	want.Empty(output)
 	want.Equal(Stats{}, stats)
-}
-
-// TestErrorString covers the sentinel type's Error method directly.
-func TestErrorString(t *testing.T) {
-	t.Parallel()
-	assert.New(t).Equal("failed to read input", ErrReadInput.Error())
 }
 
 // FuzzProcess exercises the line scanner against arbitrary byte input under the

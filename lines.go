@@ -110,7 +110,7 @@ func scan(ctx context.Context, reader io.Reader, transform Transform) ([]string,
 // scanError wraps a scanner failure in the package sentinel.
 func scanError(err error) error {
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrReadInput, err)
+		return ErrReadInput.With(err)
 	}
 	return nil
 }
